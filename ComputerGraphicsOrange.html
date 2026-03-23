@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Bump Mapping & Normal Mapping</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: monospace;
+        }
+        .controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(30, 30, 40, 0.95);
+            backdrop-filter: blur(8px);
+            padding: 15px 20px;
+            border-radius: 8px;
+            color: white;
+            z-index: 100;
+            border: 1px solid rgba(255,255,255,0.2);
+            min-width: 280px;
+            pointer-events: auto;
+        }
+        .controls h3 {
+            margin: 0 0 12px 0;
+            font-size: 1rem;
+            color: #ffaa66;
+        }
+        .control-group {
+            margin-bottom: 12px;
+        }
+        .control-group label {
+            display: block;
+            font-size: 0.8rem;
+            margin-bottom: 5px;
+        }
+        input {
+            width: 100%;
+            cursor: pointer;
+        }
+        button {
+            background: #ffaa44;
+            border: none;
+            padding: 5px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-right: 8px;
+            margin-top: 8px;
+        }
+        button:hover {
+            background: #ffcc66;
+        }
+        .status {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.7);
+            padding: 8px 15px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: monospace;
+            pointer-events: none;
+            z-index: 100;
+            max-width: 300px;
+        }
+        .status.success {
+            color: #0f0;
+        }
+        .status.error {
+            color: #ff6666;
+        }
+        .status.info {
+            color: #ffaa66;
+        }
+        .color-preview {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            vertical-align: middle;
+            margin-left: 8px;
+            border: 1px solid #fff;
+        }
+        .note {
+            font-size: 10px;
+            color: #aaa;
+            margin-top: 10px;
+            text-align: center;
+        }
+        .file-selector {
+            margin-top: 10px;
+            padding-top: 8px;
+            border-top: 1px solid #444;
+        }
+        .file-selector label {
+            display: block;
+            font-size: 0.75rem;
+            margin-bottom: 5px;
+            color: #ffaa66;
+        }
+        .file-selector input {
+            font-size: 0.7rem;
+            background: #333;
+            color: white;
+            border: 1px solid #666;
+            border-radius: 4px;
+            padding: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <h3>🍊 Bump Mapping | Normal Mapping 🍊</h3>
+        <div class="control-group">
+            <label>Bump Intensity (noise.jpg)</label>
+            <input type="range" id="bumpIntensity" min="0" max="2" step="0.01" value="0.8">
+        </div>
+        <div class="control-group">
+            <label>Normal Intensity (purple_noise.jpg)</label>
+            <input type="range" id="normalIntensity" min="0" max="2" step="0.01" value="1.0">
+        </div>
+        <div class="control-group">
+            <label>Оранжевый цвет <span id="colorPreview" class="color-preview" style="background: #ff8800;"></span></label>
+            <input type="range" id="orangeR" min="0" max="255" step="1" value="255">
+            <input type="range" id="orangeG" min="0" max="255" step="1" value="136" style="margin-top: 4px;">
+            <input type="range" id="orangeB" min="0" max="255" step="1" value="0" style="margin-top: 4px;">
+        </div>
+        <div class="control-group">
+            <label>Модель освещения:</label>
+            <button id="btnPhong">Phong</button>
+            <button id="btnBlinn">Blinn-Phong</button>
+        </div>
+        <div class="control-group">
+            <label>Ambient Light</label>
+            <input type="range" id="ambient" min="0" max="0.8" step="0.01" value="0.3">
+        </div>
+        <div class="file-selector">
+            <label>📁 Или выберите текстуры вручную:</label>
+            <input type="file" id="textureLeftFile" accept="image/jpeg,image/png,image/jpg">
+            <input type="file" id="textureRightFile" accept="image/jpeg,image/png,image/jpg" style="margin-top: 5px;">
+        </div>
+        <div class="note">Левая сфера: Diffuse × Orange + Bump Map<br>Правая сфера: Diffuse × Orange + Normal Map</div>
+    </div>
+    <div class="status" id="statusMsg">⏳ Ожидание загрузки текстур...</div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.128.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a1a);
+        scene.fog = new THREE.FogExp2(0x0a0a1a, 0.015);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 1.5, 5);
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0x404060, 0.3);
+        scene.add(ambientLight);
+        
+        const mainLight = new THREE.DirectionalLight(0xfff5e0, 1.2);
+        mainLight.position.set(3, 4, 2);
+        mainLight.castShadow = true;
+        scene.add(mainLight);
+        
+        const fillLight = new THREE.PointLight(0x6688aa, 0.5);
+        fillLight.position.set(-2, 2, 3);
+        scene.add(fillLight);
+        
+        const backLight = new THREE.PointLight(0xffaa77, 0.4);
+        backLight.position.set(1, 2, -3);
+        scene.add(backLight);
+        
+        const rimLight = new THREE.PointLight(0xffaa88, 0.45);
+        rimLight.position.set(2, 1.5, -2);
+        scene.add(rimLight);
+        
+        const gridHelper = new THREE.GridHelper(8, 16, 0x88aacc, 0x335577);
+        gridHelper.position.y = -0.9;
+        gridHelper.material.transparent = true;
+        gridHelper.material.opacity = 0.35;
+        scene.add(gridHelper);
+        
+        const groundPlane = new THREE.Mesh(
+            new THREE.PlaneGeometry(7, 7),
+            new THREE.ShadowMaterial({ opacity: 0.4, transparent: true, side: THREE.DoubleSide })
+        );
+        groundPlane.rotation.x = -Math.PI / 2;
+        groundPlane.position.y = -0.85;
+        groundPlane.receiveShadow = true;
+        scene.add(groundPlane);
+
+        const sphereGeometry = new THREE.SphereGeometry(0.9, 128, 128);
+        
+        const materialLeft = new THREE.MeshStandardMaterial({
+            color: 0xff8800,
+            roughness: 0.45,
+            metalness: 0.2
+        });
+        
+        const materialRight = new THREE.MeshStandardMaterial({
+            color: 0xff8800,
+            roughness: 0.4,
+            metalness: 0.25
+        });
+        
+        const leftSphere = new THREE.Mesh(sphereGeometry, materialLeft);
+        leftSphere.position.set(-1.4, 0, 0);
+        leftSphere.castShadow = true;
+        leftSphere.receiveShadow = true;
+        scene.add(leftSphere);
+        
+        const rightSphere = new THREE.Mesh(sphereGeometry, materialRight);
+        rightSphere.position.set(1.4, 0, 0);
+        rightSphere.castShadow = true;
+        rightSphere.receiveShadow = true;
+        scene.add(rightSphere);
+        
+        let currentBumpTexture = null;
+        let currentNormalTexture = null;
+        
+        function createNormalMapFromImage(imgElement, intensity = 1.0) {
+            const canvas = document.createElement('canvas');
+            canvas.width = imgElement.width;
+            canvas.height = imgElement.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(imgElement, 0, 0);
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imgData.data;
+            
+            const normalData = new Uint8ClampedArray(data.length);
+            
+            for (let y = 0; y < canvas.height; y++) {
+                for (let x = 0; x < canvas.width; x++) {
+                    const getLuminance = (px, py) => {
+                        const pxClamped = Math.min(Math.max(px, 0), canvas.width - 1);
+                        const pyClamped = Math.min(Math.max(py, 0), canvas.height - 1);
+                        const idx = (pyClamped * canvas.width + pxClamped) * 4;
+                        return (data[idx] + data[idx+1] + data[idx+2]) / (3 * 255);
+                    };
+                    
+                    const hx = (getLuminance(x + 1, y) - getLuminance(x - 1, y)) * intensity;
+                    const hy = (getLuminance(x, y + 1) - getLuminance(x, y - 1)) * intensity;
+                    
+                    let nx = hx;
+                    let ny = hy;
+                    let nz = 1.0;
+                    
+                    const len = Math.sqrt(nx*nx + ny*ny + nz*nz);
+                    if (len > 0.001) {
+                        nx /= len;
+                        ny /= len;
+                        nz /= len;
+                    }
+                    
+                    const idx = (y * canvas.width + x) * 4;
+                    normalData[idx] = (nx * 0.5 + 0.5) * 255;
+                    normalData[idx+1] = (ny * 0.5 + 0.5) * 255;
+                    normalData[idx+2] = (nz * 0.5 + 0.5) * 255;
+                    normalData[idx+3] = 255;
+                }
+            }
+            
+            const normalCanvas = document.createElement('canvas');
+            normalCanvas.width = canvas.width;
+            normalCanvas.height = canvas.height;
+            const normCtx = normalCanvas.getContext('2d');
+            const normImgData = new ImageData(normalData, canvas.width, canvas.height);
+            normCtx.putImageData(normImgData, 0, 0);
+            const normalTexture = new THREE.CanvasTexture(normalCanvas);
+            normalTexture.wrapS = THREE.RepeatWrapping;
+            normalTexture.wrapT = THREE.RepeatWrapping;
+            normalTexture.repeat.set(2, 2);
+            return normalTexture;
+        }
+        
+        function updateOrangeColor() {
+            const r = parseInt(document.getElementById('orangeR').value);
+            const g = parseInt(document.getElementById('orangeG').value);
+            const b = parseInt(document.getElementById('orangeB').value);
+            const colorHex = (r << 16) | (g << 8) | b;
+            
+            materialLeft.color.setHex(colorHex);
+            materialRight.color.setHex(colorHex);
+            
+            document.getElementById('colorPreview').style.background = `rgb(${r}, ${g}, ${b})`;
+        }
+        
+        function loadTextureFromFile(file, isLeftSphere) {
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    const texture = new THREE.Texture(img);
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    texture.repeat.set(2, 2);
+                    texture.needsUpdate = true;
+                    
+                    if (isLeftSphere) {
+                        materialLeft.map = texture;
+                        currentBumpTexture = img;
+                        const normalMap = createNormalMapFromImage(img, parseFloat(document.getElementById('bumpIntensity').value));
+                        materialLeft.normalMap = normalMap;
+                    } else {
+                        materialRight.map = texture;
+                        currentNormalTexture = img;
+                        const normalMap = createNormalMapFromImage(img, parseFloat(document.getElementById('normalIntensity').value));
+                        materialRight.normalMap = normalMap;
+                    }
+                    
+                    materialLeft.needsUpdate = true;
+                    materialRight.needsUpdate = true;
+                    
+                    document.getElementById('statusMsg').innerHTML = `✓ ${file.name} загружена, цвет × оранжевый`;
+                    document.getElementById('statusMsg').className = 'status success';
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        function tryLoadDefaultTextures() {
+            const imgNoise = new Image();
+            const imgPurple = new Image();
+            let loadedCount = 0;
+            
+            imgNoise.onload = () => {
+                const texture = new THREE.Texture(imgNoise);
+                texture.wrapS = THREE.RepeatWrapping;
+                texture.wrapT = THREE.RepeatWrapping;
+                texture.repeat.set(2, 2);
+                texture.needsUpdate = true;
+                materialLeft.map = texture;
+                currentBumpTexture = imgNoise;
+                const normalMap = createNormalMapFromImage(imgNoise, parseFloat(document.getElementById('bumpIntensity').value));
+                materialLeft.normalMap = normalMap;
+                materialLeft.needsUpdate = true;
+                loadedCount++;
+                updateLoadStatus(loadedCount);
+            };
+            
+            imgPurple.onload = () => {
+                const texture = new THREE.Texture(imgPurple);
+                texture.wrapS = THREE.RepeatWrapping;
+                texture.wrapT = THREE.RepeatWrapping;
+                texture.repeat.set(2, 2);
+                texture.needsUpdate = true;
+                materialRight.map = texture;
+                currentNormalTexture = imgPurple;
+                const normalMap = createNormalMapFromImage(imgPurple, parseFloat(document.getElementById('normalIntensity').value));
+                materialRight.normalMap = normalMap;
+                materialRight.needsUpdate = true;
+                loadedCount++;
+                updateLoadStatus(loadedCount);
+            };
+            
+            imgNoise.onerror = () => {
+                console.warn('noise.jpg not found');
+                document.getElementById('statusMsg').innerHTML = '⚠️ noise.jpg не найден. Используйте кнопку выбора файла.';
+                document.getElementById('statusMsg').className = 'status info';
+                loadedCount++;
+                updateLoadStatus(loadedCount);
+            };
+            
+            imgPurple.onerror = () => {
+                console.warn('purple_noise.jpg not found');
+                if (loadedCount === 0) {
+                    document.getElementById('statusMsg').innerHTML = '⚠️ Текстуры не найдены. Выберите файлы вручную.';
+                    document.getElementById('statusMsg').className = 'status info';
+                }
+                loadedCount++;
+                updateLoadStatus(loadedCount);
+            };
+            
+            imgNoise.src = 'noise.jpg?' + Date.now();
+            imgPurple.src = 'purple_noise.jpg?' + Date.now();
+        }
+        
+        function updateLoadStatus(loaded) {
+            if (loaded === 2) {
+                document.getElementById('statusMsg').innerHTML = '✓ Текстуры загружены | Цвет × оранжевый | Bump (левая) | Normal (правая)';
+                document.getElementById('statusMsg').className = 'status success';
+            }
+        }
+        
+        document.getElementById('textureLeftFile').addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                loadTextureFromFile(e.target.files[0], true);
+            }
+        });
+        
+        document.getElementById('textureRightFile').addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                loadTextureFromFile(e.target.files[0], false);
+            }
+        });
+        
+        const bumpSlider = document.getElementById('bumpIntensity');
+        const normalSlider = document.getElementById('normalIntensity');
+        const ambientSlider = document.getElementById('ambient');
+        const btnPhong = document.getElementById('btnPhong');
+        const btnBlinn = document.getElementById('btnBlinn');
+        const orangeR = document.getElementById('orangeR');
+        const orangeG = document.getElementById('orangeG');
+        const orangeB = document.getElementById('orangeB');
+        
+        bumpSlider.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            if (currentBumpTexture) {
+                const normalMap = createNormalMapFromImage(currentBumpTexture, val);
+                materialLeft.normalMap = normalMap;
+                materialLeft.needsUpdate = true;
+            }
+        });
+        
+        normalSlider.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            if (currentNormalTexture) {
+                const normalMap = createNormalMapFromImage(currentNormalTexture, val);
+                materialRight.normalMap = normalMap;
+                materialRight.needsUpdate = true;
+            }
+        });
+        
+        orangeR.addEventListener('input', updateOrangeColor);
+        orangeG.addEventListener('input', updateOrangeColor);
+        orangeB.addEventListener('input', updateOrangeColor);
+        
+        ambientSlider.addEventListener('input', (e) => {
+            ambientLight.intensity = parseFloat(e.target.value);
+        });
+        
+        btnPhong.addEventListener('click', () => {
+            materialLeft.roughness = 0.45;
+            materialLeft.metalness = 0.2;
+            materialRight.roughness = 0.4;
+            materialRight.metalness = 0.25;
+            document.getElementById('statusMsg').innerHTML = '✓ Модель освещения: Phong';
+            setTimeout(() => {
+                if (currentBumpTexture && currentNormalTexture) {
+                    document.getElementById('statusMsg').innerHTML = '✓ Текстуры загружены | Цвет × оранжевый | Bump (левая) | Normal (правая)';
+                }
+            }, 1500);
+        });
+        
+        btnBlinn.addEventListener('click', () => {
+            materialLeft.roughness = 0.3;
+            materialLeft.metalness = 0.35;
+            materialRight.roughness = 0.28;
+            materialRight.metalness = 0.4;
+            document.getElementById('statusMsg').innerHTML = '✓ Модель освещения: Blinn-Phong';
+            setTimeout(() => {
+                if (currentBumpTexture && currentNormalTexture) {
+                    document.getElementById('statusMsg').innerHTML = '✓ Текстуры загружены | Цвет × оранжевый | Bump (левая) | Normal (правая)';
+                }
+            }, 1500);
+        });
+        
+        const starGeometry = new THREE.BufferGeometry();
+        const starCount = 600;
+        const starPositions = new Float32Array(starCount * 3);
+        for (let i = 0; i < starCount; i++) {
+            starPositions[i*3] = (Math.random() - 0.5) * 180;
+            starPositions[i*3+1] = (Math.random() - 0.5) * 80;
+            starPositions[i*3+2] = (Math.random() - 0.5) * 80 - 40;
+        }
+        starGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+        const starMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.06, transparent: true, opacity: 0.5 });
+        const stars = new THREE.Points(starGeometry, starMaterial);
+        scene.add(stars);
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            leftSphere.rotation.y += 0.005;
+            rightSphere.rotation.y += 0.005;
+            stars.rotation.y += 0.0003;
+            renderer.render(scene, camera);
+        }
+        
+        animate();
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        updateOrangeColor();
+        tryLoadDefaultTextures();
+    </script>
+</body>
+</html>
