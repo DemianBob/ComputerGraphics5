@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bump Map (Sphere) + Normal Map (Model) - Pure Shader Calculations</title>
+    <title>Bump Map (Sphere) + Normal Map (Model) - SHADER VERSION</title>
     <style>
         body {
             margin: 0;
@@ -124,7 +124,7 @@
 </head>
 <body>
     <div class="controls">
-        <h3>Bump (Sphere) | Normal (Model) - PURE SHADER</h3>
+        <h3>Bump (Sphere) | Normal (Model) - SHADER</h3>
         
         <div class="control-group">
             <div class="compact-row">
@@ -167,8 +167,6 @@
             <button id="resetModelBtn">Remove model</button>
         </div>
     </div>
-    <div class="status" id="statusMsg">Ready - Pure shader calculations</div>
-    <div class="legend">Sphere: Bump mapping (height→normal in shader)<br>Model: Normal mapping (direct in shader)</div>
 
     <script type="importmap">
         {
@@ -222,7 +220,6 @@
         rimLight.position.set(1.5, 1, -2.5);
         scene.add(rimLight);
 
-        // Вспомогательные объекты
         const grid = new THREE.GridHelper(10, 20, 0x88aacc, 0x335577);
         grid.position.y = -0.85;
         grid.material.transparent = true;
@@ -237,426 +234,220 @@
         ground.position.y = -0.85;
         ground.receiveShadow = true;
         scene.add(ground);
-        
-        const sphereVertexShader = `
-            varying vec2 vUv;
-            varying vec3 vViewPosition;
-            varying vec3 vWorldNormal;
-            varying vec3 vWorldPosition;
-            
-            void main() {
-                vUv = uv;
-                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                vViewPosition = -mvPosition.xyz;
-                vWorldNormal = normalize(normalMatrix * normal);
-                vec4 worldPos = modelMatrix * vec4(position, 1.0);
-                vWorldPosition = worldPos.xyz;
-                gl_PointSize = 1.0;
-                gl_Position = projectionMatrix * mvPosition;
-            }
-        `;
-        
-        const sphereFragmentShader = `
-            uniform vec3 uColor;
-            uniform sampler2D uHeightMap;
-            uniform float uBumpIntensity;
-            uniform float uAmbientIntensity;
-            uniform vec3 uLightDir;
-            uniform vec3 uLightColor;
-            uniform vec3 uFillLightPos;
-            uniform vec3 uFillLightColor;
-            uniform vec3 uBackLightPos;
-            uniform vec3 uBackLightColor;
-            uniform float uRoughness;
-            uniform float uMetalness;
-            uniform float uTime;
-            
-            varying vec2 vUv;
-            varying vec3 vViewPosition;
-            varying vec3 vWorldNormal;
-            varying vec3 vWorldPosition;
-            
-            // Функция получения высоты из текстуры (только чтение, без преобразований)
-            float getHeight(vec2 uv) {
-                vec4 heightColor = texture2D(uHeightMap, uv);
-                // Преобразуем RGB в яркость
-                return (heightColor.r + heightColor.g + heightColor.b) / 3.0;
-            }
-            
-            // ВЫЧИСЛЕНИЕ NORMAL ИЗ HEIGHT MAP
-            vec3 calculateBumpedNormal(vec2 uv, vec3 normal, float scale) {
-                // Размер шага для выборки соседних пикселей (в зависимости от UV)
-                vec2 texelSize = vec2(1.0 / 512.0, 1.0 / 512.0);
-                
-                // Получаем высоты в 4 направлениях для более точного градиента
-                float h = getHeight(uv);
-                float hU = getHeight(uv + vec2(texelSize.x, 0.0));
-                float hV = getHeight(uv + vec2(0.0, texelSize.y));
-                float hU2 = getHeight(uv - vec2(texelSize.x, 0.0));
-                float hV2 = getHeight(uv - vec2(0.0, texelSize.y));
-                
-                // Центральная разность для более точного градиента
-                float du = (hU - hU2) * scale;
-                float dv = (hV - hV2) * scale;
-                
-                // Строим tangent space
-                vec3 tangent = vec3(1.0, 0.0, 0.0);
-                vec3 bitangent = vec3(0.0, 1.0, 0.0);
-                
-                // Адаптивный tangent space на основе нормали
-                if (abs(normal.x) > 0.9) {
-                    tangent = vec3(0.0, 0.0, 1.0);
-                    bitangent = vec3(0.0, 1.0, 0.0);
-                } else if (abs(normal.y) > 0.9) {
-                    tangent = vec3(1.0, 0.0, 0.0);
-                    bitangent = vec3(0.0, 0.0, 1.0);
-                }
-                
-                tangent = normalize(tangent - dot(tangent, normal) * normal);
-                bitangent = cross(normal, tangent);
-                
-                // ВЫЧИСЛЯЕМ perturbed normal (bump mapping calculation)
-                vec3 perturbedNormal = normalize(normal + du * tangent + dv * bitangent);
-                return perturbedNormal;
-            }
-            
-            // Функция освещения
-            vec3 calculateLighting(vec3 normal, vec3 viewDir, vec3 lightDir, vec3 lightCol, float intensity) {
-                float diff = max(dot(normal, lightDir), 0.0);
-                vec3 diffuse = diff * lightCol * intensity;
-                
-                vec3 halfVec = normalize(lightDir + viewDir);
-                float spec = pow(max(dot(normal, halfVec), 0.0), 32.0);
-                vec3 specular = spec * lightCol * intensity * 0.6;
-                
-                return diffuse + specular;
-            }
-            
-            void main() {
-                vec3 albedo = uColor;
-                vec3 normal = normalize(vWorldNormal);
-                
-                // ПРИМЕНЯЕМ BUMP MAPPING (расчёт в шейдере)
-                vec3 finalNormal = normal;
-                if (uBumpIntensity > 0.0 && uHeightMap != null) {
-                    finalNormal = calculateBumpedNormal(vUv, normal, uBumpIntensity);
-                }
-                
-                vec3 viewDir = normalize(-vViewPosition);
-                
-                // Направленное освещение
-                vec3 lightDirMain = normalize(uLightDir);
-                vec3 mainLighting = calculateLighting(finalNormal, viewDir, lightDirMain, uLightColor, 1.0);
-                
-                // Fill light (point)
-                vec3 fillLightDir = normalize(uFillLightPos - vWorldPosition);
-                float fillDist = length(uFillLightPos - vWorldPosition);
-                float fillAtten = 1.0 / (1.0 + fillDist * fillDist * 0.5);
-                vec3 fillLighting = calculateLighting(finalNormal, viewDir, fillLightDir, uFillLightColor, 0.5) * fillAtten;
-                
-                // Back light
-                vec3 backLightDir = normalize(uBackLightPos - vWorldPosition);
-                float backDist = length(uBackLightPos - vWorldPosition);
-                float backAtten = 1.0 / (1.0 + backDist * backDist * 0.5);
-                vec3 backLighting = calculateLighting(finalNormal, viewDir, backLightDir, uBackLightColor, 0.45) * backAtten;
-                
-                // Ambient
-                vec3 ambient = albedo * uAmbientIntensity;
-                
-                vec3 color = ambient + (mainLighting + fillLighting + backLighting) * albedo;
-                
-                // Применяем roughness/metalness
-                color = mix(color, color * 0.7, uRoughness);
-                color = mix(color, color * 1.3, uMetalness);
-                
-                gl_FragColor = vec4(color, 1.0);
-            }
-        `;
-        
-        // Материал сферы с шейдерами
-        const sphereUniforms = {
-            uColor: { value: new THREE.Color(0xff6600) },
-            uHeightMap: { value: null },
-            uBumpIntensity: { value: 0.9 },
-            uAmbientIntensity: { value: 0.32 },
-            uLightDir: { value: new THREE.Vector3(3, 4.2, 2).normalize() },
-            uLightColor: { value: new THREE.Color(0xfff5e0) },
-            uFillLightPos: { value: new THREE.Vector3(-2, 2, 3) },
-            uFillLightColor: { value: new THREE.Color(0x88aacc) },
-            uBackLightPos: { value: new THREE.Vector3(1, 2.2, -3) },
-            uBackLightColor: { value: new THREE.Color(0xffaa77) },
-            uRoughness: { value: 0.45 },
-            uMetalness: { value: 0.2 },
-            uTime: { value: 0 }
-        };
-        
-        const sphereMat = new THREE.ShaderMaterial({
-            uniforms: sphereUniforms,
-            vertexShader: sphereVertexShader,
-            fragmentShader: sphereFragmentShader,
-            lights: false,
-            side: THREE.DoubleSide
-        });
-        
+
+        // Сфера
+        const ORANGE_COLOR = 0xff6600;
         const sphereGeo = new THREE.SphereGeometry(0.85, 160, 160);
+        let sphereMat = new THREE.MeshStandardMaterial({ 
+            color: ORANGE_COLOR, 
+            roughness: 0.45, 
+            metalness: 0.2,
+            map: null
+        });
         const sphere = new THREE.Mesh(sphereGeo, sphereMat);
         sphere.position.set(-1.2, 0, 0);
         sphere.castShadow = true;
         sphere.receiveShadow = true;
         scene.add(sphere);
-        
-        const modelVertexShader = `
-            varying vec2 vUv;
-            varying vec3 vViewPosition;
-            varying vec3 vWorldNormal;
-            varying vec3 vWorldPosition;
-            varying mat3 vTBN;
-            
-            attribute vec3 tangent;
-            attribute vec3 bitangent;
-            
-            void main() {
-                vUv = uv;
-                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                vViewPosition = -mvPosition.xyz;
-                
-                vec4 worldPos = modelMatrix * vec4(position, 1.0);
-                vWorldPosition = worldPos.xyz;
-                
-                // Вычисляем TBN матрицу для tangent space
-                vec3 normalW = normalize(normalMatrix * normal);
-                vec3 tangentW = normalize(normalMatrix * tangent);
-                vec3 bitangentW = normalize(normalMatrix * bitangent);
-                vTBN = mat3(tangentW, bitangentW, normalW);
-                
-                vWorldNormal = normalize(normalMatrix * normal);
-                
-                gl_PointSize = 1.0;
-                gl_Position = projectionMatrix * mvPosition;
-            }
-        `;
-        
-        const modelFragmentShader = `
-            uniform sampler2D uNormalMap;
-            uniform float uNormalIntensity;
-            uniform vec3 uColor;
-            uniform float uAmbientIntensity;
-            uniform vec3 uLightDir;
-            uniform vec3 uLightColor;
-            uniform vec3 uFillLightPos;
-            uniform vec3 uFillLightColor;
-            uniform vec3 uBackLightPos;
-            uniform vec3 uBackLightColor;
-            uniform float uRoughness;
-            uniform float uMetalness;
-            
-            varying vec2 vUv;
-            varying vec3 vViewPosition;
-            varying vec3 vWorldNormal;
-            varying vec3 vWorldPosition;
-            varying mat3 vTBN;
-            
-            vec3 calculateLighting(vec3 normal, vec3 viewDir, vec3 lightDir, vec3 lightCol, float intensity) {
-                float diff = max(dot(normal, lightDir), 0.0);
-                vec3 diffuse = diff * lightCol * intensity;
-                
-                vec3 halfVec = normalize(lightDir + viewDir);
-                float spec = pow(max(dot(normal, halfVec), 0.0), 32.0);
-                vec3 specular = spec * lightCol * intensity * 0.6;
-                
-                return diffuse + specular;
-            }
-            
-            void main() {
-                vec3 albedo = uColor;
-                vec3 normal = normalize(vWorldNormal);
-                
-                // ПРИМЕНЯЕМ NORMAL MAPPING (чтение и преобразование normal map в шейдере)
-                if (uNormalIntensity > 0.0 && uNormalMap != null) {
-                    // Читаем normal map (значения в диапазоне [0,1])
-                    vec3 tangentNormal = texture2D(uNormalMap, vUv).rgb;
-                    // Конвертируем из [0,1] в [-1,1] (расчёт в шейдере)
-                    tangentNormal = tangentNormal * 2.0 - 1.0;
-                    
-                    // Применяем интенсивность
-                    tangentNormal.xy *= uNormalIntensity;
-                    tangentNormal = normalize(tangentNormal);
-                    
-                    // Конвертируем из tangent space в world space
-                    normal = normalize(vTBN * tangentNormal);
-                }
-                
-                vec3 viewDir = normalize(-vViewPosition);
-                
-                // Направленное освещение
-                vec3 lightDirMain = normalize(uLightDir);
-                vec3 mainLighting = calculateLighting(normal, viewDir, lightDirMain, uLightColor, 1.0);
-                
-                // Fill light
-                vec3 fillLightDir = normalize(uFillLightPos - vWorldPosition);
-                float fillDist = length(uFillLightPos - vWorldPosition);
-                float fillAtten = 1.0 / (1.0 + fillDist * fillDist * 0.5);
-                vec3 fillLighting = calculateLighting(normal, viewDir, fillLightDir, uFillLightColor, 0.5) * fillAtten;
-                
-                // Back light
-                vec3 backLightDir = normalize(uBackLightPos - vWorldPosition);
-                float backDist = length(uBackLightPos - vWorldPosition);
-                float backAtten = 1.0 / (1.0 + backDist * backDist * 0.5);
-                vec3 backLighting = calculateLighting(normal, viewDir, backLightDir, uBackLightColor, 0.45) * backAtten;
-                
-                // Ambient
-                vec3 ambient = albedo * uAmbientIntensity;
-                
-                vec3 color = ambient + (mainLighting + fillLighting + backLighting) * albedo;
-                
-                color = mix(color, color * 0.7, uRoughness);
-                color = mix(color, color * 1.3, uMetalness);
-                
-                gl_FragColor = vec4(color, 1.0);
-            }
-        `;
-        
-        // Функция для создания материала модели с шейдерами
-        function createModelShaderMaterial(normalMap = null, intensity = 1.0) {
-            return new THREE.ShaderMaterial({
-                uniforms: {
-                    uNormalMap: { value: normalMap },
-                    uNormalIntensity: { value: intensity },
-                    uColor: { value: new THREE.Color(0xccaa88) },
-                    uAmbientIntensity: { value: 0.32 },
-                    uLightDir: { value: new THREE.Vector3(3, 4.2, 2).normalize() },
-                    uLightColor: { value: new THREE.Color(0xfff5e0) },
-                    uFillLightPos: { value: new THREE.Vector3(-2, 2, 3) },
-                    uFillLightColor: { value: new THREE.Color(0x88aacc) },
-                    uBackLightPos: { value: new THREE.Vector3(1, 2.2, -3) },
-                    uBackLightColor: { value: new THREE.Color(0xffaa77) },
-                    uRoughness: { value: 0.45 },
-                    uMetalness: { value: 0.2 }
-                },
-                vertexShader: modelVertexShader,
-                fragmentShader: modelFragmentShader,
-                lights: false,
-                side: THREE.DoubleSide
-            });
-        }
-        
-        // Функция для вычисления tangent и bitangent
-        function computeTangents(geometry) {
-            if (!geometry.attributes.uv) return;
-            
-            const positions = geometry.attributes.position.array;
-            const normals = geometry.attributes.normal.array;
-            const uvs = geometry.attributes.uv.array;
-            const indices = geometry.index.array;
-            
-            const tangents = new Float32Array(positions.length);
-            const bitangents = new Float32Array(positions.length);
-            
-            for (let i = 0; i < indices.length; i += 3) {
-                const i1 = indices[i];
-                const i2 = indices[i+1];
-                const i3 = indices[i+2];
-                
-                const v1 = new THREE.Vector3(positions[i1*3], positions[i1*3+1], positions[i1*3+2]);
-                const v2 = new THREE.Vector3(positions[i2*3], positions[i2*3+1], positions[i2*3+2]);
-                const v3 = new THREE.Vector3(positions[i3*3], positions[i3*3+1], positions[i3*3+2]);
-                
-                const uv1 = new THREE.Vector2(uvs[i1*2], uvs[i1*2+1]);
-                const uv2 = new THREE.Vector2(uvs[i2*2], uvs[i2*2+1]);
-                const uv3 = new THREE.Vector2(uvs[i3*2], uvs[i3*2+1]);
-                
-                const edge1 = new THREE.Vector3().subVectors(v2, v1);
-                const edge2 = new THREE.Vector3().subVectors(v3, v1);
-                const deltaUV1 = new THREE.Vector2().subVectors(uv2, uv1);
-                const deltaUV2 = new THREE.Vector2().subVectors(uv3, uv1);
-                
-                const f = 1.0 / (deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y);
-                
-                const tangent = new THREE.Vector3(
-                    f * (deltaUV2.y * edge1.x - deltaUV1.y * edge2.x),
-                    f * (deltaUV2.y * edge1.y - deltaUV1.y * edge2.y),
-                    f * (deltaUV2.y * edge1.z - deltaUV1.y * edge2.z)
-                );
-                
-                const bitangent = new THREE.Vector3(
-                    f * (-deltaUV2.x * edge1.x + deltaUV1.x * edge2.x),
-                    f * (-deltaUV2.x * edge1.y + deltaUV1.x * edge2.y),
-                    f * (-deltaUV2.x * edge1.z + deltaUV1.x * edge2.z)
-                );
-                
-                tangents[i1*3] += tangent.x;
-                tangents[i1*3+1] += tangent.y;
-                tangents[i1*3+2] += tangent.z;
-                tangents[i2*3] += tangent.x;
-                tangents[i2*3+1] += tangent.y;
-                tangents[i2*3+2] += tangent.z;
-                tangents[i3*3] += tangent.x;
-                tangents[i3*3+1] += tangent.y;
-                tangents[i3*3+2] += tangent.z;
-                
-                bitangents[i1*3] += bitangent.x;
-                bitangents[i1*3+1] += bitangent.y;
-                bitangents[i1*3+2] += bitangent.z;
-                bitangents[i2*3] += bitangent.x;
-                bitangents[i2*3+1] += bitangent.y;
-                bitangents[i2*3+2] += bitangent.z;
-                bitangents[i3*3] += bitangent.x;
-                bitangents[i3*3+1] += bitangent.y;
-                bitangents[i3*3+2] += bitangent.z;
-            }
-            
-            geometry.setAttribute('tangent', new THREE.BufferAttribute(tangents, 3));
-            geometry.setAttribute('bitangent', new THREE.BufferAttribute(bitangents, 3));
-        }
-        
-        // Переменные для модели
+
+        // Модель
         let userModel = null;
         let currentNormalMapTexture = null;
         let currentNormalMapStrength = 1.0;
         let currentBumpHeightImg = null;
         
-        // Функции для работы с bump mapping сферы (только загрузка текстуры)
+        // Хранилище оригинальных материалов для модели
+        let modelOriginalMaterials = new Map();
+
+        // ========== BUMP MAPPING ЧЕРЕЗ ШЕЙДЕР ==========
+        let currentSphereShaderMaterial = null;
+        
         function applyBumpToSphere(img, intensity) {
             if (!sphere || !img) return;
-            const texture = new THREE.Texture(img);
-            texture.wrapS = THREE.RepeatWrapping;
-            texture.wrapT = THREE.RepeatWrapping;
-            texture.repeat.set(2.0, 2.0);
-            texture.needsUpdate = true;
-            sphereMat.uniforms.uHeightMap.value = texture;
-            sphereMat.uniforms.uBumpIntensity.value = intensity;
-            sphereMat.needsUpdate = true;
+            
+            // Создаем текстуру высоты
+            const heightTexture = new THREE.Texture(img);
+            heightTexture.wrapS = THREE.RepeatWrapping;
+            heightTexture.wrapT = THREE.RepeatWrapping;
+            heightTexture.repeat.set(2.0, 2.0);
+            heightTexture.needsUpdate = true;
+            
+            // Создаем шейдерный материал для сферы
+            const shaderMat = new THREE.ShaderMaterial({
+                uniforms: {
+                    uColor: { value: new THREE.Color(ORANGE_COLOR) },
+                    uBumpIntensity: { value: intensity },
+                    uHeightMap: { value: heightTexture },
+                    uRoughness: { value: 0.45 },
+                    uMetalness: { value: 0.2 },
+                    uAmbientIntensity: { value: ambientLight.intensity }
+                },
+                vertexShader: `
+                    varying vec2 vUv;
+                    varying vec3 vNormal;
+                    varying vec3 vViewPosition;
+                    
+                    void main() {
+                        vUv = uv;
+                        vNormal = normalize(normalMatrix * normal);
+                        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                        vViewPosition = -mvPosition.xyz;
+                        gl_PointSize = 1.0;
+                        gl_Position = projectionMatrix * mvPosition;
+                    }
+                `,
+                fragmentShader: `
+                    uniform vec3 uColor;
+                    uniform float uBumpIntensity;
+                    uniform sampler2D uHeightMap;
+                    uniform float uRoughness;
+                    uniform float uMetalness;
+                    uniform float uAmbientIntensity;
+                    
+                    varying vec2 vUv;
+                    varying vec3 vNormal;
+                    varying vec3 vViewPosition;
+                    
+                    void main() {
+                        vec3 N = normalize(vNormal);
+                        
+                        // Bump mapping через производные от высоты
+                        if (uBumpIntensity > 0.0 && uHeightMap != null) {
+                            float h = texture2D(uHeightMap, vUv).r;
+                            float hx = texture2D(uHeightMap, vUv + vec2(dFdx(vUv).x, 0.0)).r;
+                            float hy = texture2D(uHeightMap, vUv + vec2(0.0, dFdy(vUv).y)).r;
+                            
+                            float dHdu = (hx - h) * uBumpIntensity;
+                            float dHdv = (hy - h) * uBumpIntensity;
+                            
+                            vec3 T = normalize(dFdx(vViewPosition));
+                            vec3 B = normalize(dFdy(vViewPosition));
+                            N = normalize(N + T * dHdu + B * dHdv);
+                        }
+                        
+                        // Направленный свет
+                        vec3 lightDir = normalize(vec3(3.0, 4.2, 2.0));
+                        float diff = max(0.2, dot(N, lightDir));
+                        
+                        vec3 finalColor = uColor * (diff + uAmbientIntensity);
+                        gl_FragColor = vec4(finalColor, 1.0);
+                    }
+                `
+            });
+            
+            sphere.material = shaderMat;
+            sphereMat = shaderMat;
+            currentSphereShaderMaterial = shaderMat;
         }
         
         function removeBumpFromSphere() {
-            sphereMat.uniforms.uHeightMap.value = null;
-            sphereMat.uniforms.uBumpIntensity.value = 0;
-            sphereMat.needsUpdate = true;
+            // Восстанавливаем обычный материал
+            const newMat = new THREE.MeshStandardMaterial({ 
+                color: ORANGE_COLOR, 
+                roughness: 0.45, 
+                metalness: 0.2 
+            });
+            sphere.material = newMat;
+            sphereMat = newMat;
+            currentSphereShaderMaterial = null;
         }
         
         function updateSphereBumpIntensity() {
-            if (currentBumpHeightImg) {
+            if (currentBumpHeightImg && sphere.material && sphere.material.uniforms) {
                 const val = parseFloat(document.getElementById('bumpIntensity').value);
-                sphereMat.uniforms.uBumpIntensity.value = val;
-                document.getElementById('statusMsg').innerHTML = `Sphere: BUMP (shader calc) intensity ${val.toFixed(2)} | Normal intensity: ${currentNormalMapStrength.toFixed(2)}`;
+                sphere.material.uniforms.uBumpIntensity.value = val;
+                document.getElementById('statusMsg').innerHTML = `Sphere: BUMP active (intensity ${val.toFixed(2)}) | Normal intensity: ${currentNormalMapStrength.toFixed(2)} | Model: ${currentNormalMapTexture ? 'normal map active' : 'no normal map'}`;
             }
         }
-        
-        // Функции для работы с normal mapping модели (только загрузка текстуры)
-        function applyNormalMapToModel(modelObj, normalTexture, strength) {
-            if (!modelObj || !normalTexture) return;
+
+        function applyNormalMapWithStrength(modelObj, normalTextureImage, strength) {
+            if (!modelObj || !normalTextureImage) return;
             
-            const texture = new THREE.Texture(normalTexture);
-            texture.wrapS = THREE.RepeatWrapping;
-            texture.wrapT = THREE.RepeatWrapping;
-            texture.repeat.set(1.0, 1.0);
-            texture.needsUpdate = true;
+            // Создаем текстуру normal map
+            const normalTex = new THREE.Texture(normalTextureImage);
+            normalTex.wrapS = THREE.RepeatWrapping;
+            normalTex.wrapT = THREE.RepeatWrapping;
+            normalTex.repeat.set(2.0, 2.0);
+            normalTex.needsUpdate = true;
             
             modelObj.traverse(child => {
-                if (child.isMesh && child.material && child.material.uniforms) {
-                    child.material.uniforms.uNormalMap.value = texture;
-                    child.material.uniforms.uNormalIntensity.value = strength;
-                    child.material.needsUpdate = true;
+                if (child.isMesh) {
+                    // Сохраняем оригинальный материал если еще не сохранен
+                    if (!modelOriginalMaterials.has(child.uuid)) {
+                        modelOriginalMaterials.set(child.uuid, child.material.clone());
+                    }
+                    
+                    const origMat = child.material;
+                    
+                    const shaderMat = new THREE.ShaderMaterial({
+                        uniforms: {
+                            uBaseColor: { value: origMat.color ? origMat.color.clone() : new THREE.Color(0xccaa88) },
+                            uMainTex: { value: origMat.map || null },
+                            uNormalMap: { value: normalTex },
+                            uNormalIntensity: { value: strength },
+                            uRoughness: { value: origMat.roughness || 0.45 },
+                            uMetalness: { value: origMat.metalness || 0.2 },
+                            uAmbientIntensity: { value: ambientLight.intensity }
+                        },
+                        vertexShader: `
+                            varying vec2 vUv;
+                            varying vec3 vNormal;
+                            varying vec3 vViewPosition;
+                            
+                            void main() {
+                                vUv = uv;
+                                vNormal = normalize(normalMatrix * normal);
+                                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                                vViewPosition = -mvPosition.xyz;
+                                gl_PointSize = 1.0;
+                                gl_Position = projectionMatrix * mvPosition;
+                            }
+                        `,
+                        fragmentShader: `
+                            uniform vec3 uBaseColor;
+                            uniform sampler2D uMainTex;
+                            uniform sampler2D uNormalMap;
+                            uniform float uNormalIntensity;
+                            uniform float uRoughness;
+                            uniform float uMetalness;
+                            uniform float uAmbientIntensity;
+                            
+                            varying vec2 vUv;
+                            varying vec3 vNormal;
+                            varying vec3 vViewPosition;
+                            
+                            void main() {
+                                vec3 N = normalize(vNormal);
+                                
+                                // Normal mapping с контролем интенсивности
+                                if (uNormalIntensity > 0.0 && uNormalMap != null) {
+                                    vec3 mapN = texture2D(uNormalMap, vUv).xyz * 2.0 - 1.0;
+                                    
+                                    vec3 T = normalize(dFdx(vViewPosition));
+                                    vec3 B = normalize(dFdy(vViewPosition));
+                                    mat3 TBN = mat3(T, B, N);
+                                    vec3 tangentNormal = normalize(TBN * mapN);
+                                    
+                                    N = normalize(mix(N, tangentNormal, uNormalIntensity));
+                                }
+                                
+                                // Направленный свет
+                                vec3 lightDir = normalize(vec3(3.0, 4.2, 2.0));
+                                float diff = max(0.2, dot(N, lightDir));
+                                
+                                vec3 albedo = uBaseColor.rgb;
+                                if (uMainTex != null) {
+                                    albedo *= texture2D(uMainTex, vUv).rgb;
+                                }
+                                
+                                vec3 finalColor = albedo * (diff + uAmbientIntensity);
+                                gl_FragColor = vec4(finalColor, 1.0);
+                            }
+                        `
+                    });
+                    
+                    child.material = shaderMat;
+                    if (origMat !== shaderMat && origMat.dispose) origMat.dispose();
                 }
             });
         }
@@ -664,28 +455,26 @@
         function updateNormalIntensity() {
             if (userModel && currentNormalMapTexture) {
                 currentNormalMapStrength = parseFloat(document.getElementById('normalIntensity').value);
-                userModel.traverse(child => {
-                    if (child.isMesh && child.material && child.material.uniforms) {
-                        child.material.uniforms.uNormalIntensity.value = currentNormalMapStrength;
-                        child.material.needsUpdate = true;
-                    }
-                });
+                applyNormalMapWithStrength(userModel, currentNormalMapTexture, currentNormalMapStrength);
                 document.getElementById('statusMsg').innerHTML = `Normal intensity: ${currentNormalMapStrength.toFixed(2)} | Sphere bump: ${currentBumpHeightImg ? 'active' : 'inactive'}`;
+            } else if (!userModel && currentNormalMapTexture) {
+                document.getElementById('statusMsg').innerHTML = `Normal intensity set to ${currentNormalMapStrength.toFixed(2)} but no model loaded.`;
             }
         }
         
         function clearNormalMapFromModel(modelObj) {
             if (!modelObj) return;
+            
             modelObj.traverse(child => {
-                if (child.isMesh && child.material && child.material.uniforms) {
-                    child.material.uniforms.uNormalMap.value = null;
-                    child.material.uniforms.uNormalIntensity.value = 0;
-                    child.material.needsUpdate = true;
+                if (child.isMesh && modelOriginalMaterials.has(child.uuid)) {
+                    const origMat = modelOriginalMaterials.get(child.uuid);
+                    if (child.material && child.material.dispose) child.material.dispose();
+                    child.material = origMat.clone();
                 }
             });
         }
         
-        // Загрузка текстур (только чтение, без предварительных расчётов)
+        // Загрузка bump текстуры
         function loadBumpTextureFromFile(file) {
             const reader = new FileReader();
             reader.onload = (e) => {
@@ -694,7 +483,7 @@
                     currentBumpHeightImg = img;
                     const intensity = parseFloat(document.getElementById('bumpIntensity').value);
                     applyBumpToSphere(img, intensity);
-                    document.getElementById('statusMsg').innerHTML = `Sphere BUMP loaded: ${file.name} - calculations in shader`;
+                    document.getElementById('statusMsg').innerHTML = `Sphere BUMP: ${file.name} | Normal intensity: ${currentNormalMapStrength.toFixed(2)} | Model normal: ${currentNormalMapTexture ? 'active' : 'none'}`;
                 };
                 img.src = e.target.result;
             };
@@ -704,9 +493,10 @@
         function resetBumpMap() {
             currentBumpHeightImg = null;
             removeBumpFromSphere();
-            document.getElementById('statusMsg').innerHTML = `Bump map cleared - calculations in shader disabled`;
+            document.getElementById('statusMsg').innerHTML = `Bump map cleared. Sphere is orange. Normal intensity: ${currentNormalMapStrength.toFixed(2)} | Model: ${currentNormalMapTexture ? 'normal map active' : 'no normal map'}`;
         }
         
+        // Загрузка normal текстуры для модели
         function loadNormalMapForModel(file) {
             const reader = new FileReader();
             reader.onload = (e) => {
@@ -715,10 +505,10 @@
                     currentNormalMapTexture = img;
                     currentNormalMapStrength = parseFloat(document.getElementById('normalIntensity').value);
                     if (userModel) {
-                        applyNormalMapToModel(userModel, img, currentNormalMapStrength);
-                        document.getElementById('statusMsg').innerHTML = `Normal map loaded: ${file.name} - calculations in shader`;
+                        applyNormalMapWithStrength(userModel, img, currentNormalMapStrength);
+                        document.getElementById('statusMsg').innerHTML = `Normal map applied: ${file.name} | Intensity: ${currentNormalMapStrength.toFixed(2)} | Sphere bump: ${currentBumpHeightImg ? 'active' : 'inactive'}`;
                     } else {
-                        document.getElementById('statusMsg').innerHTML = `Normal map loaded (${file.name}), load model first`;
+                        document.getElementById('statusMsg').innerHTML = `Normal map loaded (${file.name}), but no model. Load OBJ/GLTF first. Intensity: ${currentNormalMapStrength.toFixed(2)}`;
                     }
                 };
                 img.src = e.target.result;
@@ -730,7 +520,9 @@
             currentNormalMapTexture = null;
             if (userModel) {
                 clearNormalMapFromModel(userModel);
-                document.getElementById('statusMsg').innerHTML = `Normal map cleared - calculations in shader disabled`;
+                document.getElementById('statusMsg').innerHTML = `Normal map removed. Sphere bump: ${currentBumpHeightImg ? 'active' : 'inactive'}`;
+            } else {
+                document.getElementById('statusMsg').innerHTML = 'Normal map cleared (no model loaded).';
             }
         }
         
@@ -741,10 +533,14 @@
                 userModel.traverse((child) => {
                     if (child.isMesh) {
                         if (child.geometry) child.geometry.dispose();
-                        if (child.material) child.material.dispose();
+                        if (child.material) {
+                            if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                            else child.material.dispose();
+                        }
                     }
                 });
                 userModel = null;
+                modelOriginalMaterials.clear();
             }
         }
         
@@ -768,20 +564,6 @@
             modelObj.position.y += yOffset;
         }
         
-        function applyShaderToModel(modelObj) {
-            modelObj.traverse(child => {
-                if (child.isMesh && child.geometry.attributes.uv) {
-                    computeTangents(child.geometry);
-                    const shaderMat = createModelShaderMaterial(null, 0);
-                    if (child.material && child.material.color) {
-                        shaderMat.uniforms.uColor.value = child.material.color;
-                    }
-                    child.material.dispose();
-                    child.material = shaderMat;
-                }
-            });
-        }
-        
         const gltfLoader = new GLTFLoader();
         const objLoader = new OBJLoader();
         
@@ -790,16 +572,15 @@
             if (!file) return;
             const ext = file.name.split('.').pop().toLowerCase();
             
-            const loadAndApplyShader = (modelObj) => {
+            const loadAndApplyNormal = (modelObj) => {
                 disposeOldModel();
                 userModel = modelObj;
                 scene.add(userModel);
                 alignModelToGround(userModel, 1.2);
-                applyShaderToModel(userModel);
                 if (currentNormalMapTexture) {
-                    applyNormalMapToModel(userModel, currentNormalMapTexture, currentNormalMapStrength);
+                    applyNormalMapWithStrength(userModel, currentNormalMapTexture, currentNormalMapStrength);
                 }
-                document.getElementById('statusMsg').innerHTML = `Model loaded: ${file.name} - normal mapping calculations in shader`;
+                document.getElementById('statusMsg').innerHTML = `Model: ${file.name} | Normal map ${currentNormalMapTexture ? 'applied' : 'none'} | Intensity: ${currentNormalMapStrength.toFixed(2)} | Sphere bump: ${currentBumpHeightImg ? 'active' : 'inactive'}`;
             };
             
             if (ext === 'obj') {
@@ -807,7 +588,7 @@
                 reader.onload = (ev) => {
                     try {
                         const objModel = objLoader.parse(ev.target.result);
-                        loadAndApplyShader(objModel);
+                        loadAndApplyNormal(objModel);
                     } catch(err) {
                         document.getElementById('statusMsg').innerHTML = 'OBJ parse error';
                     }
@@ -817,7 +598,7 @@
                 const reader = new FileReader();
                 reader.onload = (ev) => {
                     gltfLoader.parse(ev.target.result, '', (gltf) => {
-                        loadAndApplyShader(gltf.scene);
+                        loadAndApplyNormal(gltf.scene);
                     }, () => {
                         document.getElementById('statusMsg').innerHTML = 'GLTF error';
                     });
@@ -826,10 +607,9 @@
             }
         });
         
-        // UI обработчики
         document.getElementById('resetModelBtn').addEventListener('click', () => {
             disposeOldModel();
-            document.getElementById('statusMsg').innerHTML = 'Model removed';
+            document.getElementById('statusMsg').innerHTML = `Model removed. Sphere bump: ${currentBumpHeightImg ? 'active' : 'inactive (orange)'}`;
         });
         
         document.getElementById('resetNormalBtn').addEventListener('click', () => {
@@ -840,6 +620,7 @@
             resetBumpMap();
         });
         
+        // UI события
         document.getElementById('textureFile').addEventListener('change', (e) => {
             if (e.target.files.length) loadBumpTextureFromFile(e.target.files[0]);
         });
@@ -849,7 +630,9 @@
         });
         
         document.getElementById('bumpIntensity').addEventListener('input', () => {
-            if (currentBumpHeightImg) updateSphereBumpIntensity();
+            if (currentBumpHeightImg) {
+                updateSphereBumpIntensity();
+            }
         });
         
         document.getElementById('normalIntensity').addEventListener('input', () => {
@@ -859,7 +642,9 @@
         document.getElementById('ambient').addEventListener('input', (e) => {
             const val = parseFloat(e.target.value);
             ambientLight.intensity = val;
-            sphereMat.uniforms.uAmbientIntensity.value = val;
+            if (sphere.material && sphere.material.uniforms) {
+                sphere.material.uniforms.uAmbientIntensity.value = val;
+            }
             if (userModel) {
                 userModel.traverse(child => {
                     if (child.isMesh && child.material && child.material.uniforms) {
@@ -870,40 +655,49 @@
         });
         
         document.getElementById('btnPhong').addEventListener('click', () => {
-            sphereMat.uniforms.uRoughness.value = 0.47;
-            sphereMat.uniforms.uMetalness.value = 0.18;
-            if (userModel) {
-                userModel.traverse(child => {
-                    if (child.isMesh && child.material && child.material.uniforms) {
-                        child.material.uniforms.uRoughness.value = 0.47;
-                        child.material.uniforms.uMetalness.value = 0.18;
+            const setRoughMetal = (obj) => {
+                if (!obj) return;
+                obj.traverse(child => {
+                    if (child.isMesh && child.material) {
+                        if (child.material.uniforms) {
+                            child.material.uniforms.uRoughness.value = 0.47;
+                            child.material.uniforms.uMetalness.value = 0.18;
+                        }
                     }
                 });
+            };
+            if (userModel) setRoughMetal(userModel);
+            if (sphere.material && sphere.material.uniforms) {
+                sphere.material.uniforms.uRoughness.value = 0.47;
+                sphere.material.uniforms.uMetalness.value = 0.18;
             }
-            document.getElementById('statusMsg').innerHTML = 'Material: Phong style';
+            document.getElementById('statusMsg').innerHTML = `Material: Phong-style | Sphere bump: ${currentBumpHeightImg ? 'active' : 'inactive'}`;
         });
         
         document.getElementById('btnBlinn').addEventListener('click', () => {
-            sphereMat.uniforms.uRoughness.value = 0.28;
-            sphereMat.uniforms.uMetalness.value = 0.38;
-            if (userModel) {
-                userModel.traverse(child => {
-                    if (child.isMesh && child.material && child.material.uniforms) {
-                        child.material.uniforms.uRoughness.value = 0.28;
-                        child.material.uniforms.uMetalness.value = 0.38;
+            const setBlinn = (obj) => {
+                if (!obj) return;
+                obj.traverse(child => {
+                    if (child.isMesh && child.material) {
+                        if (child.material.uniforms) {
+                            child.material.uniforms.uRoughness.value = 0.28;
+                            child.material.uniforms.uMetalness.value = 0.38;
+                        }
                     }
                 });
+            };
+            if (userModel) setBlinn(userModel);
+            if (sphere.material && sphere.material.uniforms) {
+                sphere.material.uniforms.uRoughness.value = 0.28;
+                sphere.material.uniforms.uMetalness.value = 0.38;
             }
-            document.getElementById('statusMsg').innerHTML = 'Material: Blinn-Phong style';
+            document.getElementById('statusMsg').innerHTML = `Material: Blinn-Phong style | Sphere bump: ${currentBumpHeightImg ? 'active' : 'inactive'}`;
         });
         
-        // Анимация
-        let time = 0;
+        // Анимация поворота
         function animate() {
             requestAnimationFrame(animate);
-            time += 0.016;
             sphere.rotation.y += 0.004;
-            sphereMat.uniforms.uTime.value = time;
             if (userModel) {
                 userModel.rotation.y += 0.004;
             }
@@ -918,7 +712,18 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
         
-        document.getElementById('statusMsg').innerHTML = 'Ready - All calculations (bump/normal) performed in shaders';
+        // Добавляем статус
+        const statusDiv = document.createElement('div');
+        statusDiv.className = 'status';
+        statusDiv.id = 'statusMsg';
+        statusDiv.innerHTML = 'Shader bump/normal ready';
+        document.body.appendChild(statusDiv);
+        
+        const legendDiv = document.createElement('div');
+        legendDiv.className = 'legend';
+        legendDiv.innerHTML = 'Bump (shader) | Normal (shader intensity)';
+        document.body.appendChild(legendDiv);
+
     </script>
 </body>
 </html>
